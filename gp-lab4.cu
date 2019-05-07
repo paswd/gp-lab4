@@ -102,7 +102,7 @@ __global__ void SwapRows(TNum *a, TNum *b, uint32_t row1, uint32_t row2, uint32_
 }
 
 __global__ void Normalize(TNum *a, TNum *b, uint32_t row, uint32_t shift) {
-	if (!(a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)] > .0000001)) {
+	if (!(abs(a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)]) > .0000001)) {
 		return;
 	}
 	uint32_t begin = blockDim.x * blockIdx.x + threadIdx.x;
@@ -114,13 +114,13 @@ __global__ void Normalize(TNum *a, TNum *b, uint32_t row, uint32_t shift) {
 			a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)];
 	}
 	for (col = begin; col < *SIZE_K; col += offset) {
-		b[GetLinearPosition(row, col, *SIZE_N, *SIZE_M)] /=
+		b[GetLinearPosition(row, col, *SIZE_N, *SIZE_K)] /=
 			a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)];
 	}
 }
 
 __global__ void GaussFirst(TNum *a, TNum *b, uint32_t row, uint32_t shift) {
-	if (!(a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)] > .0000001)) {
+	if (!(abs(a[GetLinearPosition(row, shift, *SIZE_N, *SIZE_M)]) > .0000001)) {
 		return;
 	}
 	Position begin = SetPosition(blockDim.x * blockIdx.x + threadIdx.x,
@@ -132,7 +132,7 @@ __global__ void GaussFirst(TNum *a, TNum *b, uint32_t row, uint32_t shift) {
 	//TNum head;
 	for (curr.Row = begin.Row + row + 1; curr.Row < *SIZE_N; curr.Row += offset.Row) {
 		//head = a[GetLinearPosition(curr.Row, shift, *SIZE_N, *SIZE_M)];
-		if (!(a[GetLinearPosition(curr.Row, shift, *SIZE_N, *SIZE_M)] > .0000001)) {
+		if (!(abs(a[GetLinearPosition(curr.Row, shift, *SIZE_N, *SIZE_M)]) > .0000001)) {
 			continue;
 		}
 		for (curr.Col = begin.Col + shift + 1; curr.Col < *SIZE_M; curr.Col += offset.Col) {
@@ -218,6 +218,7 @@ __host__ void PrintMatrix(TNum *matrix, uint32_t height, uint32_t width) {
 	}
 }
 
+
 __host__ int main(void) {
 	Comparator cmp;
 	uint32_t n, m, k;
@@ -229,26 +230,20 @@ __host__ int main(void) {
 
 	TNum *a = new TNum[n * m];
 	TNum *b = new TNum[n * k];
-	//TNum *x = new TNum[m * k];
-	//uint32_t shifts
 
 	InputMatrix(a, n, m);
 	InputMatrix(b, n, k);
 
+
 	TNum *cuda_a;
 	TNum *cuda_b;
-	//TNum *cuda_x;
 
 	CSC(cudaMalloc((void**) &cuda_a, sizeof(TNum) * n * m));
 	CSC(cudaMalloc((void**) &cuda_b, sizeof(TNum) * n * k));
-	//cudaMalloc((void**) &cuda_x, sizeof(TNum) * m * k);
-	//SetArrayZeros<<<dim3(1024), dim3(1024)>>>(cuda_x, m * k);
 
 	CSC(cudaMemcpy(cuda_a, a, sizeof(TNum) * n * m, cudaMemcpyHostToDevice));
 	CSC(cudaMemcpy(cuda_b, b, sizeof(TNum) * n * k, cudaMemcpyHostToDevice));
 
-
-	//Set up-triangle view
 	uint32_t row = 0;
 	uint32_t *shifts = new uint32_t[n];
 	memset(shifts, 0, n * sizeof(uint32_t));
@@ -279,12 +274,15 @@ __host__ int main(void) {
 				sizeof(TNum), cudaMemcpyDeviceToHost));
 
 			TNum curr = row_value;
+			//cout << curr << " : " << max_value << endl;
 
-			if (row_max_pos != row && row_value != max_value) {
+			if (row_max_pos != row && row_value < max_value) {
 				SwapRows<<<dim3(1024), dim3(1024)>>>(cuda_a, cuda_b, row, row_max_pos, col);
 				curr = max_value;
 			}
-			if (!(curr > .0000001)) {
+			if (!(abs(curr) > .0000001)) {
+				//cout << "CURR = " << curr << endl;
+				//cout << "OUT1" << endl;
 				continue;
 			}
 		} else {
@@ -293,18 +291,23 @@ __host__ int main(void) {
 			//cout << row << ":" << col << endl;
 			CSC(cudaMemcpy(&curr, cuda_a + GetLinearPosition(row, col, n, m),
 				sizeof(TNum), cudaMemcpyDeviceToHost));
-			if (!(curr > .0000001)) {
+			if (!(abs(curr) > .0000001)) {
+				//cout << "OUT2" << endl;
 				continue;
 			}
 		}
 		/*CSC(cudaMemcpy(a, cuda_a, sizeof(TNum) * n * m, cudaMemcpyDeviceToHost));
 		CSC(cudaMemcpy(b, cuda_b, sizeof(TNum) * n * k, cudaMemcpyDeviceToHost));
+		cout << "Col: " << col << endl;
 		PrintMatrix(a, n, m);
 		cout << "---" << endl;
 		PrintMatrix(b, n, k);
 		cout << "~~~" << endl;*/
 
+		//cudaPrintfInit();
 		Normalize<<<dim3(1024), dim3(1024)>>>(cuda_a, cuda_b, row, col);
+		//cudaPrintfDisplay(stdout, true);
+    	//cudaPrintfEnd();
 
 		/*CSC(cudaMemcpy(a, cuda_a, sizeof(TNum) * n * m, cudaMemcpyDeviceToHost));
 		CSC(cudaMemcpy(b, cuda_b, sizeof(TNum) * n * k, cudaMemcpyDeviceToHost));
@@ -312,6 +315,7 @@ __host__ int main(void) {
 		cout << "---" << endl;
 		PrintMatrix(b, n, k);
 		cout << "+++" << endl;*/
+
 		if (row < n - 1) {
 			GaussFirst<<<dim3(32, 32), dim3(32, 32)>>>(cuda_a, cuda_b, row, col);
 		}
@@ -373,7 +377,12 @@ __host__ int main(void) {
 
 	TNum zero = 0.;
 
-	for (uint32_t i = 0; i < shifts[0]; i++) {
+	uint32_t untill = 0;
+	if (row > 0) {
+		untill = shifts[0];
+	}
+	uint32_t rows_cnt = 0;
+	for (uint32_t i = 0; i < untill; i++) {
 		for (uint32_t j = 0; j < k; j++) {
 			//cout << "1: " << shifts[0] << "::" << i << ":" << j << endl;
 			if (j > 0) {
@@ -381,9 +390,11 @@ __host__ int main(void) {
 			}
 			cout << scientific << zero;
 		}
+		rows_cnt++;
 		cout << endl;
 	}
 
+	//cout << row << endl;
 
 	for (uint32_t i = 0; i < row; i++) {
 		if (i > 0) {
@@ -395,6 +406,7 @@ __host__ int main(void) {
 					//cout << "2: " << i << ":" << j << endl;
 					cout << scientific << zero;
 				}
+				rows_cnt++;
 				cout << endl;
 			}
 		}
@@ -405,10 +417,16 @@ __host__ int main(void) {
 			//cout << "3: " << i << ":" << j << endl;
 			cout << scientific << b[GetLinearPosition(i, j, n, k)];
 		}
+		rows_cnt++;
 		cout << endl;
 	}
 
-	for (uint32_t i = 0; i < m - shifts[row - 1] - 1; i++) {
+	//cout << "TEST0" << endl;
+	//cout << shifts[0] << endl;
+
+	//untill = m - shifts[max(0, (int32_t) row - 1)];
+
+	for (uint32_t i = 0; i < m - rows_cnt; i++) {
 		for (uint32_t j = 0; j < k; j++) {
 			if (j > 0) {
 				cout << " ";
@@ -418,6 +436,7 @@ __host__ int main(void) {
 		}
 		cout << endl;
 	}
+	//cout << "TEST1" << endl;
 	/*cout << "SHIFTS:\n";
 	for (uint32_t i = 0; i < row; i++) {
 		cout << shifts[i] << endl;
@@ -425,8 +444,8 @@ __host__ int main(void) {
 
 	delete [] shifts;
 
-	delete [] cuda_a;
-	delete [] cuda_b;	
+	delete [] a;
+	delete [] b;	
 	//delete [] cuda_x;
 
 	return 0;
